@@ -1,4 +1,5 @@
 
+
 <!DOCTYPE html>
 <html lang="sr">
 <head>
@@ -235,13 +236,18 @@ textarea.form-input { resize:vertical; min-height:80px; }
 .lightbox {
   display:none; position:fixed; inset:0; z-index:9999;
   background:rgba(10,10,15,0.96); align-items:center; justify-content:center;
-  padding:2rem; touch-action:pan-y;
+  padding:2rem; touch-action:none; overflow:hidden;
 }
 .lightbox.open { display:flex; }
 .lightbox img {
   max-width:92vw; max-height:88vh; object-fit:contain; display:block;
   box-shadow:0 20px 60px rgba(0,0,0,.5);
+  touch-action:none; cursor:zoom-in; transform-origin:center center;
+  transition:transform .25s ease;
+  user-select:none; -webkit-user-select:none;
 }
+.lightbox img.zoomed { cursor:grab; transition:none; }
+.lightbox img.panning { cursor:grabbing; }
 .lightbox-close {
   position:absolute; top:1.5rem; right:2rem; z-index:2;
   background:none; border:1px solid var(--border); color:var(--white);
@@ -464,6 +470,7 @@ var galleryImages = [
   "/ljutice/images/13.jpg","/ljutice/images/14.jpg","/ljutice/images/15.jpg","/ljutice/images/16.jpg"
 ];
 var lbIndex = 0;
+var lbScale = 1, lbPanX = 0, lbPanY = 0;
 
 function toggleStanModal() {
   document.getElementById('stanModalOverlay').classList.toggle('active');
@@ -471,6 +478,7 @@ function toggleStanModal() {
 
 function openLightbox(i) {
   lbIndex = i;
+  resetZoom();
   updateLightbox();
   document.getElementById('lightbox').classList.add('open');
   document.body.style.overflow = 'hidden';
@@ -478,14 +486,25 @@ function openLightbox(i) {
 function closeLightbox() {
   document.getElementById('lightbox').classList.remove('open');
   document.body.style.overflow = '';
+  resetZoom();
 }
 function navLightbox(dir) {
+  if (lbScale > 1) return;
   lbIndex = (lbIndex + dir + galleryImages.length) % galleryImages.length;
+  resetZoom();
   updateLightbox();
 }
 function updateLightbox() {
   document.getElementById('lightbox-img').src = galleryImages[lbIndex];
   document.getElementById('lightbox-counter').textContent = (lbIndex+1) + " / " + galleryImages.length;
+}
+function applyTransform() {
+  document.getElementById('lightbox-img').style.transform = 'translate(' + lbPanX + 'px,' + lbPanY + 'px) scale(' + lbScale + ')';
+}
+function resetZoom() {
+  lbScale = 1; lbPanX = 0; lbPanY = 0;
+  applyTransform();
+  document.getElementById('lightbox-img').classList.remove('zoomed');
 }
 document.getElementById('lightbox').addEventListener('click', function(e){
   if (e.target.id === 'lightbox') closeLightbox();
@@ -497,19 +516,91 @@ document.addEventListener('keydown', function(e){
   if (e.key === 'ArrowRight') navLightbox(1);
 });
 
-/* SWIPE (touch) navigacija — radi zajedno sa strelicama */
-var touchStartX = 0;
-var touchEndX = 0;
-document.getElementById('lightbox').addEventListener('touchstart', function(e){
-  touchStartX = e.changedTouches[0].screenX;
-}, { passive:true });
-document.getElementById('lightbox').addEventListener('touchend', function(e){
-  touchEndX = e.changedTouches[0].screenX;
-  var diff = touchEndX - touchStartX;
-  if (Math.abs(diff) > 40) {
-    if (diff < 0) navLightbox(1); else navLightbox(-1);
+/* ZOOM (pinch + dupli tap) i SWIPE navigacija na dodir */
+var lbEl = document.getElementById('lightbox');
+var lbImgEl = document.getElementById('lightbox-img');
+var touchStartX = 0, touchStartY = 0;
+var lastTapTime = 0;
+var pinchStartDist = 0, pinchStartScale = 1;
+var panStartX = 0, panStartY = 0, panOriginX = 0, panOriginY = 0;
+var isPanning = false;
+
+function lbDist(touches) {
+  var dx = touches[0].clientX - touches[1].clientX;
+  var dy = touches[0].clientY - touches[1].clientY;
+  return Math.sqrt(dx*dx + dy*dy);
+}
+function lbToggleZoom() {
+  if (lbScale > 1) {
+    resetZoom();
+  } else {
+    lbScale = 2.5;
+    lbPanX = 0; lbPanY = 0;
+    applyTransform();
+    lbImgEl.classList.add('zoomed');
+  }
+}
+
+lbEl.addEventListener('touchstart', function(e){
+  if (e.touches.length === 2) {
+    pinchStartDist = lbDist(e.touches);
+    pinchStartScale = lbScale;
+  } else if (e.touches.length === 1) {
+    touchStartX = e.touches[0].screenX;
+    touchStartY = e.touches[0].screenY;
+    if (lbScale > 1) {
+      isPanning = true;
+      panStartX = e.touches[0].clientX;
+      panStartY = e.touches[0].clientY;
+      panOriginX = lbPanX;
+      panOriginY = lbPanY;
+      lbImgEl.classList.add('panning');
+    }
   }
 }, { passive:true });
+
+lbEl.addEventListener('touchmove', function(e){
+  if (e.touches.length === 2) {
+    var dist = lbDist(e.touches);
+    lbScale = Math.min(Math.max(pinchStartScale * (dist / pinchStartDist), 1), 5);
+    applyTransform();
+    lbImgEl.classList.toggle('zoomed', lbScale > 1);
+  } else if (e.touches.length === 1 && isPanning) {
+    lbPanX = panOriginX + (e.touches[0].clientX - panStartX);
+    lbPanY = panOriginY + (e.touches[0].clientY - panStartY);
+    applyTransform();
+  }
+}, { passive:true });
+
+lbEl.addEventListener('touchend', function(e){
+  isPanning = false;
+  lbImgEl.classList.remove('panning');
+  if (lbScale <= 1.02) resetZoom();
+
+  if (e.changedTouches.length === 1 && e.touches.length === 0) {
+    var now = Date.now();
+    if (now - lastTapTime < 300) {
+      lbToggleZoom();
+      lastTapTime = 0;
+      return;
+    }
+    lastTapTime = now;
+
+    if (lbScale <= 1) {
+      var touchEndX = e.changedTouches[0].screenX;
+      var touchEndY = e.changedTouches[0].screenY;
+      var diffX = touchEndX - touchStartX;
+      var diffY = touchEndY - touchStartY;
+      if (Math.abs(diffX) > 40 && Math.abs(diffX) > Math.abs(diffY)) {
+        if (diffX < 0) navLightbox(1); else navLightbox(-1);
+      }
+    }
+  }
+}, { passive:true });
+
+lbImgEl.addEventListener('dblclick', function(){
+  lbToggleZoom();
+});
 
 </script>
 
